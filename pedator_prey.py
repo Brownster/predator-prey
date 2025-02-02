@@ -38,7 +38,7 @@ CELL_SIZE = 50  # Each grid cell is CELL_SIZE x CELL_SIZE
 GRID_WIDTH = WIDTH // CELL_SIZE + 1
 GRID_HEIGHT = HEIGHT // CELL_SIZE + 1
 
-# Initialize the grid as a global variable
+# Global grid initialization
 grid = [[[] for _ in range(GRID_HEIGHT)] for _ in range(GRID_WIDTH)]
 
 def get_cell(x, y):
@@ -66,6 +66,17 @@ def get_nearby_agents(agent, agent_type):
                 nearby_agents.extend([a for a in grid[x][y] if isinstance(a, agent_type)])
     return nearby_agents
 
+def is_colliding(agent1, agent2):
+    """
+    Check if two agents are colliding.
+    Uses squared distance comparison for efficiency.
+    """
+    dx = agent1.x - agent2.x
+    dy = agent1.y - agent2.y
+    distance_sq = dx * dx + dy * dy
+    radius_sum = agent1.size + agent2.size
+    return distance_sq < radius_sum * radius_sum
+
 # ----------------------------
 # Agent Classes
 # ----------------------------
@@ -82,7 +93,7 @@ class Agent:
         self.is_predator = is_predator
 
     def move(self, direction=None):
-        """Move in one of four directions; if no action provided, move randomly."""
+        """Move in one of four directions; if no direction provided, move randomly."""
         if direction == "up":
             self.y -= self.speed
         elif direction == "down":
@@ -107,7 +118,6 @@ class Agent:
         return self.energy <= 0 or self.age >= self.lifespan
 
     def should_reproduce(self):
-        # Adaptive reproduction probability based on energy and age
         reproduction_prob = min(1.0, self.energy / 100 + self.age / self.lifespan)
         return random.random() < reproduction_prob
 
@@ -118,9 +128,7 @@ class Agent:
                 self.x + random.randint(-20, 20),
                 self.y + random.randint(-20, 20)
             )
-            # Apply a small mutation in speed
             offspring.speed += random.uniform(-0.2, 0.2)
-            # Mutate Q-table if it exists (for learning agents)
             if hasattr(self, 'q_table'):
                 offspring.q_table = {state: {action: val + random.uniform(-0.1, 0.1)
                                              for action, val in actions.items()}
@@ -131,18 +139,16 @@ class Agent:
 class Predator(Agent):
     def __init__(self, x, y):
         super().__init__(x, y, PREDATOR_COLOR, PREDATOR_SIZE, PREDATOR_SPEED, is_predator=True)
-        self.q_table = {}  # Dictionary for Q-values
+        self.q_table = {}
         self.exploration_rate = EXPLORATION_RATE
 
     def get_state(self, prey_list):
         if not prey_list:
             return None
-        # Choose nearest prey from the provided list (using spatial hashing)
         nearest_prey = min(prey_list, key=lambda p: math.hypot(p.x - self.x, p.y - self.y))
         dx = nearest_prey.x - self.x
         dy = nearest_prey.y - self.y
         distance = math.hypot(dx, dy)
-        # Adaptive binning: fine when close (<50 px), coarser otherwise.
         if distance < 50:
             state = (round(dx / 10), round(dy / 10))
         else:
@@ -172,18 +178,16 @@ class Predator(Agent):
 class Prey(Agent):
     def __init__(self, x, y):
         super().__init__(x, y, PREY_COLOR, PREY_SIZE, PREY_SPEED)
-        self.q_table = {}  # Q-values for evasion strategy
+        self.q_table = {}
         self.exploration_rate = EXPLORATION_RATE
 
     def get_state(self, predators):
         if not predators:
             return None
-        # Find the nearest predator among those provided by spatial hash
         nearest_predator = min(predators, key=lambda pr: math.hypot(pr.x - self.x, pr.y - self.y))
         dx = nearest_predator.x - self.x
         dy = nearest_predator.y - self.y
         distance = math.hypot(dx, dy)
-        # Adaptive binning for prey as well
         if distance < 50:
             state = (round(dx / 10), round(dy / 10))
         else:
@@ -222,7 +226,7 @@ class Plant(Agent):
         return None
 
 def actions_list():
-    """Helper function to provide the list of possible actions."""
+    """Helper function to return the list of possible actions."""
     return ["up", "down", "left", "right"]
 
 # ----------------------------
@@ -237,7 +241,7 @@ plants = [Plant(random.randint(0, WIDTH), random.randint(0, HEIGHT)) for _ in ra
 # ----------------------------
 pygame.init()
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Predator-Prey Simulation with Spatial Hashing")
+pygame.display.set_caption("Predator-Prey Simulation with Spatial Hashing & Optimized Collision")
 clock = pygame.time.Clock()
 
 running = True
@@ -245,12 +249,12 @@ while running:
     clock.tick(FPS)
     screen.fill(BACKGROUND_COLOR)
 
-    # Process events (e.g., quit)
+    # Process events
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
 
-    # Update the spatial grid with current positions of all agents
+    # Update spatial grid with positions of all agents
     update_grid(predators + prey + plants)
 
     # ----------------------------
@@ -262,14 +266,14 @@ while running:
         if state:
             action = predator.choose_action(state)
             predator.move(action)
-            reward = -1  # default penalty
-            # Check collision with nearby prey (only in nearby cells)
+            reward = -1  # Default penalty
+            # Check collision using the optimized is_colliding function
             for p in nearby_prey:
-                if math.hypot(p.x - predator.x, p.y - predator.y) < predator.size:
+                if is_colliding(predator, p):
                     predator.energy += 20
                     if p in prey:
                         prey.remove(p)
-                    reward = 10  # reward for catching prey
+                    reward = 10  # Reward for catching prey
                     break
             next_state = predator.get_state(nearby_prey)
             predator.update_q_table(state, action, reward, next_state)
@@ -293,11 +297,11 @@ while running:
         if state:
             action = p.choose_action(state)
             p.move(action)
-            reward = 1  # reward for surviving
-            # Check if any nearby predator catches the prey
+            reward = 1  # Reward for surviving
+            # Check collision: if any nearby predator collides with this prey, it dies.
             for predator in nearby_predators:
-                if math.hypot(predator.x - p.x, predator.y - p.y) < predator.size:
-                    p.energy = 0  # prey dies
+                if is_colliding(p, predator):
+                    p.energy = 0  # Prey dies
                     reward = -10
                     break
             next_state = p.get_state(nearby_predators)
